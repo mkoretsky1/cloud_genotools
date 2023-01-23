@@ -21,17 +21,163 @@ import plotly
 import joblib
 import pickle as pkl
 from google.cloud import aiplatform
+from google.cloud import storage
 
 #local imports
 from QC.utils import shell_do, get_common_snps, rm_tmps, merge_genos
 from QC.qc import callrate_prune, het_prune, sex_prune, related_prune, variant_prune
-from Ancestry.ancestry import plot_3d, get_raw_files, munge_training_data, calculate_pcs, transform, train_umap_classifier, run_admixture, umap_transform_with_fitted, split_cohort_ancestry
+from Ancestry.ancestry import plot_3d, munge_training_data, calculate_pcs, transform, train_umap_classifier, run_admixture, umap_transform_with_fitted, split_cohort_ancestry
 
 from utils.dependencies import check_plink, check_plink2, check_admixture
 
 plink_exec = check_plink()
 plink2_exec = check_plink2()
 admix_exec = check_admixture()
+
+def get_raw_files(geno_path, ref_path, labels_path, out_path, train):
+    step = "get_raw_files"
+    print()
+    print(f"RUNNING: {step}")
+    print()
+
+    outdir = os.path.dirname(out_path)
+    out_paths = {}
+
+    # variant prune geno before getting common snps
+    geno_prune_path = f'{out_path}_variant_pruned'
+    geno_prune_cmd = f'{plink2_exec} --bfile {geno_path} --geno 0.1 --make-bed --out {geno_prune_path}'
+    shell_do(geno_prune_cmd)
+    out_paths['geno_pruned_bed'] = geno_prune_path
+
+    ref_common_snps = f'{outdir}/ref_common_snps'
+    common_snps_file = f'{ref_common_snps}.common_snps'
+
+    # during training get common snps between ref panel and geno
+    if train:
+        common_snps_files = get_common_snps(ref_path, geno_prune_path, ref_common_snps)
+        # add common_snps_files output paths to out_paths
+        out_paths = {**out_paths, **common_snps_files}
+    # otherwise download common snps file from cloud and extract common snps from training
+    else:
+        storage_client = storage.Client('genotools')
+        bucket = storage_client.get_bucket('common_snps')
+        blob = bucket.blob('ref_common_snps.common_snps')
+        blob.download_to_filename(common_snps_file)
+        extract_cmd = f'{plink2_exec} --bfile {ref_path} --extract {common_snps_file} --make-bed --out {ref_common_snps}'
+        shell_do(extract_cmd)
+
+        # add to out_paths (same as common_snps_files)
+        out_paths['common_snps'] = common_snps_file
+        out_paths['bed'] = ref_common_snps
+
+    # get raw version of common snps - reference panel
+    raw_ref_cmd = f'{plink2_exec} --bfile {ref_common_snps} --recode A --out {ref_common_snps}'
+    shell_do(raw_ref_cmd)
+
+    # read in raw common snps
+    ref_raw = pd.read_csv(f'{ref_common_snps}.raw', sep='\s+')
+
+    # separate IDs and snps
+    ref_ids = ref_raw[['FID','IID']]
+    ref_snps = ref_raw.drop(columns=['FID', 'IID', 'PAT', 'MAT', 'SEX', 'PHENOTYPE'], axis=1)
+    
+    # change snp column names to avoid sklearn warning/future error
+    ref_snps_cols = ref_snps.columns.str.extract('(.*)_')[0]
+    ref_snps.columns = ref_snps_cols
+
+    # col names to set post-imputation
+    col_names = ['FID','IID'] + list(ref_snps_cols)
+
+    # mean imputation for missing SNPs data
+    mean_imp = SimpleImputer(missing_values=np.nan, strategy='mean')
+    ref_snps = mean_imp.fit_transform(ref_snps)
+    ref_snps = pd.DataFrame(ref_snps)
+    ref_snps.columns = ref_snps_cols
+
+    ref_raw = pd.concat([ref_ids,ref_snps], axis=1)
+    ref_raw.columns = col_names
+
+    # read ancestry file with reference labels 
+    ancestry = pd.read_csv(f'{labels_path}', sep='\t', header=None, names=['FID','IID','label'])
+    ref_fam = pd.read_csv(f'{ref_path}.fam', sep='\s+', header=None)
+    ref_labeled = ref_fam.merge(ancestry, how='left', left_on=[0,1], right_on=['FID','IID'])
+
+    # combined_labels
+    labeled_ref_raw = ref_raw.merge(ref_labeled, how='left', on=['FID','IID'])
+    labeled_ref_raw.drop(columns=[0,1,2,3,4,5],inplace=True)
+
+    print()
+    print()
+    print("Labeled Reference Ancestry Counts:")
+    print(labeled_ref_raw.label.value_counts())
+    print()
+    print()
+
+    # get reference alleles from ref_common_snps
+    ref_common_snps_ref_alleles = f'{ref_common_snps}.ref_allele'
+    ref_common_snps_bim = pd.read_csv(f'{ref_common_snps}.bim', header=None, sep='\t')
+    ref_common_snps_bim.columns = ['chr', 'rsid', 'kb', 'pos', 'a1', 'a2']
+    ref_common_snps_bim[['rsid','a1']].to_csv(ref_common_snps_ref_alleles, sep='\t', header=False, index=False)
+    out_paths['ref_alleles'] = ref_common_snps_ref_alleles
+
+    geno_common_snps = f'{out_path}_common_snps'
+
+    geno_common_snps_files = get_common_snps(geno_prune_path, ref_common_snps, geno_common_snps)
+
+    # read geno common snps bim file
+    geno_common_snps_bim = pd.read_csv(f'{geno_common_snps}.bim', sep='\s+', header=None)
+    geno_common_snps_bim.columns = ['chr', 'rsid', 'kb', 'pos', 'a1', 'a2']
+    
+    # make chr:pos merge ids
+    ref_common_snps_bim['merge_id'] = ref_common_snps_bim['chr'].astype(str) + ':' + ref_common_snps_bim['pos'].astype(str)
+    geno_common_snps_bim['merge_id'] = geno_common_snps_bim['chr'].astype(str) + ':' + geno_common_snps_bim['pos'].astype(str)
+
+    # merge and write over geno common snps files so snp ids match
+    merge_common_snps_bim = geno_common_snps_bim[['merge_id','a1','a2']].merge(ref_common_snps_bim, how='inner', on=['merge_id'])
+    merge_common_snps_bim[['chr','rsid','kb','pos','a1_x','a2_x']].to_csv(f'{geno_common_snps}.bim', sep='\t', header=None, index=None)
+
+    # getting raw version of common snps - genotype
+    raw_geno_cmd = f'{plink2_exec} --bfile {geno_common_snps} --recode A --out {geno_common_snps}'
+    shell_do(raw_geno_cmd)
+
+    # read in raw genotypes
+    raw_geno = pd.read_csv(f'{geno_common_snps}.raw', sep='\s+')
+
+    # separate IDs and SNPs
+    geno_ids = raw_geno[['FID','IID']]
+    geno_snps = raw_geno.drop(columns=['FID', 'IID', 'PAT', 'MAT', 'SEX', 'PHENOTYPE'], axis=1)
+
+    # change col names to match ref
+    geno_snps.columns = geno_snps.columns.str.extract('(.*)_')[0]
+
+    # adding missing snps when not training
+    missing_cols = []
+    if not train:
+        for col in ref_snps.columns:
+            if col not in geno_snps.columns:
+                missing_cols += [pd.Series(np.repeat(2, geno_snps.shape[0]), name=col)]
+        
+        if len(missing_cols) > 0:
+            missing_cols = pd.concat(missing_cols, axis=1)
+            geno_snps = pd.concat([geno_snps, missing_cols], axis=1)
+        # reordering columns to match ref for imputation
+        geno_snps = geno_snps[ref_snps.columns]
+
+    # mean imputation for missing SNPs data
+    geno_snps = mean_imp.transform(geno_snps)
+    geno_snps = pd.DataFrame(geno_snps)
+
+    raw_geno = pd.concat([geno_ids, geno_snps], axis=1)
+    raw_geno.columns = col_names
+    raw_geno['label'] = 'new'
+
+    out_dict = {
+        'raw_ref': labeled_ref_raw,
+        'raw_geno': raw_geno,
+        'out_paths': out_paths
+    }
+
+    return out_dict
 
 def load_umap_classifier(pipe_clf, X_test, y_test):
     step = "load_umap_classifier"
