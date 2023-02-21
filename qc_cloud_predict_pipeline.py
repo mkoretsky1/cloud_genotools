@@ -347,16 +347,10 @@ def run_ancestry(geno_path, out_path, ref_panel, ref_labels, train=False, train_
         out=out_path
     )
 
-    admix = run_admixture(
-        predicted_labels=pred['data']['ids'],
-        train_pca=calc_pcs['labeled_train_pca'],
-        out_path=out_path
-    )
-
     umap_transforms = umap_transform_with_fitted(
         ref_pca=calc_pcs['labeled_ref_pca'],
         X_new=pred['data']['X_new'],
-        y_pred=admix['data']['ids']
+        y_pred=pred['data']['ids']
     )
     
 #     x_min, x_max = min(umap_transforms['total_umap'].iloc[:,0]), max(umap_transforms['total_umap'].iloc[:,0])
@@ -416,7 +410,6 @@ def run_ancestry(geno_path, out_path, ref_panel, ref_labels, train=False, train_
         'train_pcs': calc_pcs['labeled_train_pca'],
         'ref_pcs': calc_pcs['labeled_ref_pca'],
         'projected_pcs': calc_pcs['new_samples_projected'],
-        'admix_data': admix['data'],
         'total_umap': umap_transforms['total_umap'],
         'ref_umap': umap_transforms['ref_umap'],
         'new_samples_umap': umap_transforms['new_samples_umap'],
@@ -425,13 +418,11 @@ def run_ancestry(geno_path, out_path, ref_panel, ref_labels, train=False, train_
 
     metrics_dict = {
         'predicted_counts': pred['metrics'],
-        'adjusted_counts': admix['metrics'],
         'test_accuracy': trained_clf['test_accuracy']
     }
 
     outfiles_dict = {
-        'predicted_labels': pred['output'],
-        'adjusted_labels': admix['output']
+        'predicted_labels': pred['output']
     }
     
     out_dict = {
@@ -476,12 +467,12 @@ ancestry_out = f'{sex_out}_ancestry'
 ancestry = run_ancestry(geno_path=sex_out, out_path=ancestry_out, ref_panel=ref_panel, ref_labels=ref_labels, train=train)
 
 # get ancestry counts to add to output .h5 later
-ancestry_counts_df = pd.DataFrame(ancestry['metrics']['adjusted_counts']).reset_index()
+ancestry_counts_df = pd.DataFrame(ancestry['metrics']['predicted_counts']).reset_index()
 ancestry_counts_df.columns = ['label', 'count']
 
 
 # split cohort into individual ancestry groups
-pred_labels_path = ancestry['output']['adjusted_labels']['labels_outpath']
+pred_labels_path = ancestry['output']['predicted_labels']['labels_outpath']
 cohort_split = split_cohort_ancestry(geno_path=sex_out, labels_path=pred_labels_path, out_path=ancestry_out)
 
 # ancestry-specific pruning steps
@@ -591,7 +582,7 @@ projected_pcs = ancestry['data']['projected_pcs']
 total_umap = ancestry['data']['total_umap']
 ref_umap = ancestry['data']['ref_umap']
 new_samples_umap = ancestry['data']['new_samples_umap']
-pred_ancestry_labels = ancestry['data']['admix_data']['ids']
+pred_ancestry_labels = ancestry['data']['predict_data']['ids']
 
 metrics_df.to_hdf(metrics_outfile, key='QC', mode='w')
 pruned_samples_df.to_hdf(metrics_outfile, key='pruned_samples')
