@@ -315,7 +315,7 @@ def run_ancestry(geno_path, out_path, ref_panel, ref_labels, train=False, train_
     # initialize connection to vertex ai model endpoint
     cloud_project = 'genotools'
     cloud_region = 'us-central1'
-    cloud_endpoint_id = '9131351709702946816'
+    cloud_endpoint_id = '3167706193762189312'
 
     aiplatform.init(project=cloud_project, location=cloud_region)
     endpoint = aiplatform.Endpoint(cloud_endpoint_id)
