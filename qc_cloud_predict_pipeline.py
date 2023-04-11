@@ -226,7 +226,7 @@ def predict_ancestry_from_pcs(projected, pipe_clf, label_encoder, out):
     X_new_arr = np.array(X_new)
 
     # if num samples > ~2000, need to split into multiple batches of predictions
-    num_splits = round((X_new.shape[0] / 2000), 0)
+    num_splits = round((X_new.shape[0] / 2500), 0)
 
     y_pred = []
 
