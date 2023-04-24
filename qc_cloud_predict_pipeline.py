@@ -28,11 +28,10 @@ from QC.utils import shell_do, get_common_snps, rm_tmps, merge_genos
 from QC.qc import callrate_prune, het_prune, sex_prune, related_prune, variant_prune
 from Ancestry.ancestry import plot_3d, munge_training_data, calculate_pcs, transform, train_umap_classifier, umap_transform_with_fitted, split_cohort_ancestry
 
-from utils.dependencies import check_plink, check_plink2, check_admixture
+from utils.dependencies import check_plink, check_plink2
 
 plink_exec = check_plink()
 plink2_exec = check_plink2()
-admix_exec = check_admixture()
 
 def get_raw_files(geno_path, ref_path, labels_path, out_path, train):
     step = "get_raw_files"
