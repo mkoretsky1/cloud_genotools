@@ -33,7 +33,7 @@ from utils.dependencies import check_plink, check_plink2
 plink_exec = check_plink()
 plink2_exec = check_plink2()
 
-def get_raw_files(geno_path, ref_path, labels_path, out_path, train):
+def get_raw_files(geno_path, ref_path, labels_path, out_path, train, bucket):
     step = "get_raw_files"
     print()
     print(f"RUNNING: {step}")
@@ -59,7 +59,7 @@ def get_raw_files(geno_path, ref_path, labels_path, out_path, train):
     # otherwise download common snps file from cloud and extract common snps from training
     else:
         storage_client = storage.Client('genotools')
-        bucket = storage_client.get_bucket('common_snps')
+        bucket = storage_client.get_bucket(bucket)
         blob = bucket.blob('ref_common_snps.common_snps')
         blob.download_to_filename(common_snps_file)
         extract_cmd = f'{plink2_exec} --bfile {ref_path} --extract {common_snps_file} --make-bed --out {ref_common_snps}'
@@ -275,7 +275,7 @@ def predict_ancestry_from_pcs(projected, pipe_clf, label_encoder, out):
 
     return out_dict
 
-def run_ancestry(geno_path, out_path, ref_panel, ref_labels, train=False, train_param_grid=None):
+def run_ancestry(geno_path, out_path, ref_panel, ref_labels, train=False, model='GP2', train_param_grid=None):
     step = "predict_ancestry"
     print()
     print(f"RUNNING: {step}")
@@ -288,12 +288,19 @@ def run_ancestry(geno_path, out_path, ref_panel, ref_labels, train=False, train_
     # create directories if not already in existence
     # os.makedirs(plot_dir, exist_ok=True)
 
+    # vertex ai model endpoint information
+    cloud_project = 'genotools'
+
+    model_dict = {'GP2':{'region':'us-central1','endpoint_id':'3167706193762189312','bucket':'common_snps'},
+                  'NeuroChip':{'region':'europe-west2','endpoint_id':'3396540951781441536','bucket':'neurochip_common_snps'}}
+
     raw = get_raw_files(
         geno_path=geno_path,
         ref_path=ref_panel,
         labels_path=ref_labels,
         out_path=out_path,
-        train=train
+        train=train,
+        bucket=model_dict[model]['bucket']
     )
 
     train_split = munge_training_data(labeled_ref_raw=raw['raw_ref'])
@@ -311,13 +318,9 @@ def run_ancestry(geno_path, out_path, ref_panel, ref_labels, train=False, train_
         plot_dir=plot_dir
     )
 
-    # initialize connection to vertex ai model endpoint
-    cloud_project = 'genotools'
-    cloud_region = 'us-central1'
-    cloud_endpoint_id = '3167706193762189312'
-
-    aiplatform.init(project=cloud_project, location=cloud_region)
-    endpoint = aiplatform.Endpoint(cloud_endpoint_id)
+    # initialize connected to vertex ai endpoint
+    aiplatform.init(project=cloud_project, location=model_dict[model]['region'])
+    endpoint = aiplatform.Endpoint(model_dict[model]['endpoint_id'])
 
     # if not training, pass the endpoint instead of model
     if not train:
@@ -440,6 +443,7 @@ parser.add_argument('--geno', type=str, default='nope', help='Genotype: (string 
 parser.add_argument('--ref', type=str, default='nope', help='Genotype: (string file path). Path to PLINK format reference genotype file, everything before the *.bed/bim/fam.')
 parser.add_argument('--ref_labels', type=str, default='nope', help='tab-separated plink-style IDs with ancestry label (FID  IID label) with no header')
 parser.add_argument('--train', type=bool, default=False, help='Whether to train a new model or use pretrained model for prediction')
+parser.add_argument('--model', type=str, default='GP2', help='Either GP2 (NeuroBooster) or NeuroChip')
 parser.add_argument('--callrate', type=float, default=0.02, help='Minimum Callrate threshold for QC')
 parser.add_argument('--out', type=str, default='nope', help='Prefix for output (including path)')
 
@@ -449,6 +453,7 @@ geno_path = args.geno
 ref_panel = args.ref
 ref_labels = args.ref_labels
 train = args.train
+model = args.model
 callrate = args.callrate
 out_path = args.out
 
@@ -463,7 +468,7 @@ sex = sex_prune(callrate_out, sex_out)
 # run ancestry methods
 ancestry_out = f'{sex_out}_ancestry'
 # no longer pass a model path, instead specify if training or not in pipeline (defaults to train=False)
-ancestry = run_ancestry(geno_path=sex_out, out_path=ancestry_out, ref_panel=ref_panel, ref_labels=ref_labels, train=train)
+ancestry = run_ancestry(geno_path=sex_out, out_path=ancestry_out, ref_panel=ref_panel, ref_labels=ref_labels, train=train, model=model)
 
 # get ancestry counts to add to output .h5 later
 ancestry_counts_df = pd.DataFrame(ancestry['metrics']['predicted_counts']).reset_index()
