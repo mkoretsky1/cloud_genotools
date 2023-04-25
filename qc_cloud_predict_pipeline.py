@@ -87,15 +87,6 @@ def get_raw_files(geno_path, ref_path, labels_path, out_path, train, bucket):
     # col names to set post-imputation
     col_names = ['FID','IID'] + list(ref_snps_cols)
 
-    # mean imputation for missing SNPs data
-    mean_imp = SimpleImputer(missing_values=np.nan, strategy='mean')
-    ref_snps = mean_imp.fit_transform(ref_snps)
-    ref_snps = pd.DataFrame(ref_snps)
-    ref_snps.columns = ref_snps_cols
-
-    ref_raw = pd.concat([ref_ids,ref_snps], axis=1)
-    ref_raw.columns = col_names
-
     # read ancestry file with reference labels 
     ancestry = pd.read_csv(f'{labels_path}', sep='\t', header=None, names=['FID','IID','label'])
     ref_fam = pd.read_csv(f'{ref_path}.fam', sep='\s+', header=None)
@@ -161,10 +152,6 @@ def get_raw_files(geno_path, ref_path, labels_path, out_path, train, bucket):
             geno_snps = pd.concat([geno_snps, missing_cols], axis=1)
         # reordering columns to match ref for imputation
         geno_snps = geno_snps[ref_snps.columns]
-
-    # mean imputation for missing SNPs data
-    geno_snps = mean_imp.transform(geno_snps)
-    geno_snps = pd.DataFrame(geno_snps)
 
     raw_geno = pd.concat([geno_ids, geno_snps], axis=1)
     raw_geno.columns = col_names
