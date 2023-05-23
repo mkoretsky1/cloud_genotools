@@ -87,6 +87,9 @@ def get_raw_files(geno_path, ref_path, labels_path, out_path, train, bucket):
     # col names to set post-imputation
     col_names = ['FID','IID'] + list(ref_snps_cols)
 
+    ref_raw = pd.concat([ref_ids,ref_snps], axis=1)
+    ref_raw.columns = col_names
+
     # read ancestry file with reference labels 
     ancestry = pd.read_csv(f'{labels_path}', sep='\t', header=None, names=['FID','IID','label'])
     ref_fam = pd.read_csv(f'{ref_path}.fam', sep='\s+', header=None)
