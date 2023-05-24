@@ -490,13 +490,12 @@ for geno, label in zip(cohort_split['paths'], cohort_split['labels']):
     related_dict[label] = related
     
     # het
+    het_out = f'{related_out}_het'
     if related['pass']:
-        het_out = f'{related_out}_het'
         het = het_prune(related_out, het_out)
         het_dict[label] = het
     else:
         related_out = geno
-        het_out = f'{related_out}_het'
         het = het_prune(related_out, het_out)
         het_dict[label] = het
     
