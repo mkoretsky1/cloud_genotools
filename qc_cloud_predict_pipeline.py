@@ -289,8 +289,8 @@ def run_ancestry(geno_path, out_path, ref_panel, ref_labels, train=False, model=
     # vertex ai model endpoint information
     cloud_project = 'genotools'
 
-    model_dict = {'GP2':{'region':'us-central1','endpoint_id':'3167706193762189312','bucket':'common_snps'},
-                  'NeuroChip':{'region':'europe-west2','endpoint_id':'3396540951781441536','bucket':'neurochip_common_snps'}}
+    model_dict = {'GP2':{'region':'europe-west3','endpoint_id':'1897238100053065728','bucket':'gp2_common_snps'},
+                  'NeuroChip':{'region':'europe-west2','endpoint_id':'6480987727041921024','bucket':'neurochip_common_snps'}}
 
     raw = get_raw_files(
         geno_path=geno_path,
