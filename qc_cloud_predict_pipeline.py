@@ -24,11 +24,11 @@ from google.cloud import aiplatform
 from google.cloud import storage
 
 #local imports
-from QC.utils import shell_do, get_common_snps, rm_tmps, merge_genos
-from QC.qc import callrate_prune, het_prune, sex_prune, related_prune, variant_prune
-from Ancestry.ancestry import plot_3d, munge_training_data, calculate_pcs, transform, train_umap_classifier, umap_transform_with_fitted, split_cohort_ancestry
-
-from utils.dependencies import check_plink, check_plink2
+from genotools.dependencies import check_plink, check_plink2
+from genotools.utils import shell_do, get_common_snps
+from genotools.qc import SampleQC
+from genotools.qc import VariantQC
+from genotools.ancestry import Ancestry
 
 plink_exec = check_plink()
 plink2_exec = check_plink2()
@@ -301,9 +301,11 @@ def run_ancestry(geno_path, out_path, ref_panel, ref_labels, train=False, model=
         bucket=model_dict[model]['bucket']
     )
 
-    train_split = munge_training_data(labeled_ref_raw=raw['raw_ref'])
+    ancestry = Ancestry()
 
-    calc_pcs = calculate_pcs(
+    train_split = ancestry.munge_training_data(labeled_ref_raw=raw['raw_ref'])
+
+    calc_pcs = ancestry.calculate_pcs(
         X_train=train_split['X_train'], 
         X_test=train_split['X_test'],
         y_train=train_split['y_train'],
@@ -330,7 +332,7 @@ def run_ancestry(geno_path, out_path, ref_panel, ref_labels, train=False, model=
 
     # otherwise, train a new model
     else:
-        trained_clf = train_umap_classifier(
+        trained_clf = ancestry.train_umap_classifier(
             X_train=calc_pcs['X_train'],
             X_test=calc_pcs['X_test'],
             y_train=train_split['y_train'],
@@ -347,7 +349,7 @@ def run_ancestry(geno_path, out_path, ref_panel, ref_labels, train=False, model=
         out=out_path
     )
 
-    umap_transforms = umap_transform_with_fitted(
+    umap_transforms = ancestry.umap_transform_with_fitted(
         ref_pca=calc_pcs['labeled_ref_pca'],
         X_new=pred['data']['X_new'],
         y_pred=pred['data']['ids']
@@ -455,12 +457,15 @@ model = args.model
 callrate = args.callrate
 out_path = args.out
 
+sample_qc = SampleQC()
+variant_qc = VariantQC()
+
 # sample-level pruning and metrics
 callrate_out = f'{geno_path}_callrate'
-callrate = callrate_prune(geno_path, callrate_out, mind=callrate)
+callrate = sample_qc.run_callrate_prune(geno_path, callrate_out, mind=callrate)
 
 sex_out = f'{callrate_out}_sex'
-sex = sex_prune(callrate_out, sex_out)
+sex = sample_qc.run_sex_prune(callrate_out, sex_out)
 
 
 # run ancestry methods
@@ -475,7 +480,7 @@ ancestry_counts_df.columns = ['label', 'count']
 
 # split cohort into individual ancestry groups
 pred_labels_path = ancestry['output']['predicted_labels']['labels_outpath']
-cohort_split = split_cohort_ancestry(geno_path=sex_out, labels_path=pred_labels_path, out_path=ancestry_out)
+cohort_split = ancestry.split_cohort_ancestry(geno_path=sex_out, labels_path=pred_labels_path, out_path=ancestry_out)
 
 # ancestry-specific pruning steps
 het_dict = dict()
@@ -486,26 +491,26 @@ for geno, label in zip(cohort_split['paths'], cohort_split['labels']):
 
     # related
     related_out = f'{geno}_related'
-    related = related_prune(geno, related_out, prune_related=False)
+    related = sample_qc.run_related_prune(geno, related_out, prune_related=False)
     related_dict[label] = related
     
     # het
     het_out = f'{related_out}_het'
     if related['pass']:
-        het = het_prune(related_out, het_out)
+        het = sample_qc.run_het_prune(related_out, het_out)
         het_dict[label] = het
     else:
         related_out = geno
-        het = het_prune(related_out, het_out)
+        het = sample_qc.run_het_prune(related_out, het_out)
         het_dict[label] = het
     
     # variant
     variant_out = f'{het_out}_variant'
     if het['pass']:
-        variant = variant_prune(het_out, variant_out)
+        variant = variant_qc.variant_prune(het_out, variant_out)
         variant_dict[label] = variant
     else:
-        variant = variant_prune(related_out, variant_out)
+        variant = variant_qc.variant_prune(related_out, variant_out)
         variant_dict[label] = variant
 
 
@@ -540,14 +545,14 @@ for item in steps:
     
     for metric, value in item['metrics'].items():
         tmp_metrics_df = pd.DataFrame({'step':[step], 'pruned_count':[value], 'metric':[metric], 'ancestry':[ancestry_label], 'level':[level], 'pass': [pf]})
-        metrics_df = metrics_df.append(tmp_metrics_df)
+        metrics_df = pd.concat([metrics_df, tmp_metrics_df], ignore_index=True)
     
     samplefile = item['output']['pruned_samples']
     if os.path.isfile(samplefile):
         pruned = pd.read_csv(samplefile, sep='\t')
         if pruned.shape[0] > 0:
             pruned.loc[:,'step'] = step
-            pruned_samples_df = pruned_samples_df.append(pruned[['FID','IID','step']])
+            metrics_df = pd.concat([metrics_df, tmp_metrics_df], ignore_index=True)
         
 for item in steps2:
     for ancestry_label, metrics in item.items():
@@ -563,14 +568,14 @@ for item in steps2:
                 pruned = pd.read_csv(samplefile, sep='\t', header=0, usecols=[0,1], names=['FID','IID'])
                 if pruned.shape[0] > 0:
                     pruned.loc[:,'step'] = step
-                    pruned_samples_df = pruned_samples_df.append(pruned[['FID','IID','step']])
+                    pruned_samples_df = pd.concat([pruned_samples_df, pruned[['FID','IID','step']]], ignore_index=True)
             
         else:
             level = 'variant'
 
         for metric, value in metrics['metrics'].items():
             tmp_metrics_df = pd.DataFrame({'step':[step], 'pruned_count':[value], 'metric':[metric], 'ancestry':[ancestry_label], 'level':[level], 'pass': [pf]})
-            metrics_df = metrics_df.append(tmp_metrics_df)
+            metrics_df = pd.concat([metrics_df, tmp_metrics_df], ignore_index=True)
 
 metrics_df.reset_index(drop=True, inplace=True)
 
